@@ -170,9 +170,9 @@ class Camera:
 
         :param f: focal length
         :type f: double
-        :param theta_rad: digitization raster skew
+        :param theta_rad: digitization raster skew (radians)
         :type theta_rad: double
-        :param a: pixel aspect ration
+        :param a: pixel aspect ratio
         :type a: double
         :param u0_px: principal point x position (pixels)
         :type u0_px: double

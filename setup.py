@@ -5,5 +5,6 @@ setup(
     version='0.1',
     py_modules=['camera'],
     license='The MIT License',
-    long_description=open('README.txt').read(),
+    long_description=open('README.rst').read(),
+    install_requires=['pyyaml', 'numpy', 'matplotlib', 'scipy']
 )
