@@ -56,6 +56,15 @@ Reference
    :maxdepth: 2
    
    api
+   
+Development
+-----------
+
+To test the package run::
+
+    $ ./run_tests.sh
+    
+There are some of the module missing. I appreciate pull requests that fill the gaps.    
 
 
 Indices and tables

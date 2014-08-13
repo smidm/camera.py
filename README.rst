@@ -46,6 +46,17 @@ Load camera parameters from a file::
 Documentation
 -------------
 
+https://readthedocs.org/projects/python-projective-camera-model/
+
+Development
+-----------
+
+To test the package run::
+
+    $ ./run_tests.sh
+    
+The module is missing some (essential) functionality (search for TODO comments). I appreciate pull requests that fill the gaps. 
+
 License
 -------
 
