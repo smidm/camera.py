@@ -1,6 +1,7 @@
 import camera
 import numpy as np
 from nose.tools import *
+import math
 
 
 def p2e_test():
@@ -35,22 +36,28 @@ def p3e_test():
 
 def load_test():
     c = camera.Camera(1)
-    c.load('camera_01.yaml')
+    c.load('test/camera_01.yaml')
     # pitch dimensions [-20, -10, 19, 9.5]  # xmin, ymin, xmax, ymax
     points = np.array([[-20, -10, 0], [-20, 9.5, 0], [19, 9.5, 0], [19, -10, 0], [-20, -10, 0]]).T
     c.plot_world_points(points, 'r-', solve_visibility=False)
     points = np.array([[0, -10, 0], [0, 9.5, 0]]).T
     c.plot_world_points(points, 'y-', solve_visibility=False)
     import matplotlib.pylab as plt
-    plt.imshow(plt.imread('cam01.png'))
+    plt.imshow(plt.imread('test/cam01.png'))
     # plt.show()
-    plt.imsave()
     plt.savefig('camera_load_test.png', dpi=150)
 
 
-
-
-
-
-
+def init_test():
+    c = camera.Camera(1)
+    c.set_K_elements(1225.0, math.pi / 2, 1, 480, 384)
+    R = np.array(
+        [[-0.9316877145365, -0.3608289515885, 0.002545329627547],
+         [-0.1725273110187, 0.4247524018287, -0.8888909933995],
+         [0.3296724908378, -0.8263880720441, -0.4579894432589]])
+    c.set_R(R)
+    c.set_t(np.array([[-1.365061486465], [3.431608806127], [17.74182159488]]))
+    eq_(c.get_focal_length(), 1225.)
+    assert np.array_equal(c.get_principal_point_px(), np.array([[480., 384.]]))
+    c.world_to_image(np.array([[0., 0., 0.]]).T)
 
