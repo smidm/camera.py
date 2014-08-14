@@ -12,8 +12,13 @@ Features
 
 Installation
 ------------
+<<<<<<< HEAD
 
 ::
+=======
+:: 
+
+>>>>>>> c49cd295286c1f9cd34024db3bee6242b827846e
     pip install git+https://github.com/smidm/camera.py.git
     
 Usage
@@ -46,7 +51,11 @@ Load camera parameters from a file::
 Documentation
 -------------
 
+<<<<<<< HEAD
 https://readthedocs.org/projects/python-projective-camera-model/
+=======
+http://python-projective-camera-model.readthedocs.org
+>>>>>>> c49cd295286c1f9cd34024db3bee6242b827846e
 
 Development
 -----------
