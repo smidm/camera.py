@@ -667,7 +667,7 @@ class Camera:
                     mean_x = image_points_px[0, :].mean()
                     plt.text(mean_x, max_y + object_label_y_shift, label)
 
-    def _null(A, eps=1e-15):
+    def _null(self, A, eps=1e-15):
         """
         Matrix null space.
 
