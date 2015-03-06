@@ -4,6 +4,7 @@ import yaml
 from scipy.special import cbrt
 from scipy.interpolate import griddata
 from scipy.optimize import minimize_scalar
+from warnings import warn
 
 # Bibliography:
 # [1] Sara R. Matousek M. 3D Computer Vision. January 7, 2014.
@@ -366,7 +367,8 @@ class Camera:
             Ainv = np.linalg.inv(A)
             undistorted_image_coords = p2e(A.dot(e2p(self._undistort_division(p2e(Ainv.dot(e2p(distorted_image_coords)))))))
         else:
-            assert False  # not implemented
+            warn('undistortion not implemented')
+            undistorted_image_coords = distorted_image_coords
         return undistorted_image_coords
 
     def distort(self, undistorted_image_coords):
