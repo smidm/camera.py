@@ -5,6 +5,10 @@ from scipy.special import cbrt
 from scipy.interpolate import griddata
 from scipy.optimize import minimize_scalar
 from warnings import warn
+try:
+    import cv2
+except ImportError:
+    warn('OpenCV not found, OpenCV camera model will be not available.')
 
 # Bibliography:
 # [1] Sara R. Matousek M. 3D Computer Vision. January 7, 2014.
@@ -138,7 +142,8 @@ class Camera:
         self.tsai_nfx = -1
         self.tsai_dx = -1
         self.tsai_dy = -1
-        self.calibration_type = 'standard'  # other possible values: bouguet, kannala, division
+        self.opencv_dist_coeff = None
+        self.calibration_type = 'standard'  # other possible values: bouguet, kannala, division, opencv
 
     def save(self, filename):
         """
@@ -168,6 +173,8 @@ class Camera:
         elif self.calibration_type == 'division':
             data['division_lambda'] = self.division_lambda
             data['division_z_n'] = self.division_z_n
+        elif self.calibration_type == 'opencv':
+            data['opencv_dist_coeff'] = self.opencv_dist_coeff.tolist()
         else:
             data['kappa'] = self.kappa.tolist()
         yaml.dump(data, open(filename, 'w'))
@@ -224,6 +231,8 @@ class Camera:
         elif self.calibration_type == 'division':
             self.division_lambda = data['division_lambda']
             self.division_z_n = data['division_z_n']
+        elif self.calibration_type == 'opencv':
+            self.opencv_dist_coeff = np.array(data['opencv_dist_coeff'])
         else:
             self.kappa = np.array(data['kappa']).reshape((2,))
         self.update_P()
@@ -341,43 +350,76 @@ class Camera:
         :return: transformed image
         :rtype: np.ndarray, shape=(n, m) or (n, m, 3)
         """
-        xx, yy = np.meshgrid(np.arange(img.shape[1]), np.arange(img.shape[0]))
-        img_coords = np.array([xx.ravel(), yy.ravel()])
-        y_l = self.undistort(img_coords)
-        if img.ndim == 2:
-            return griddata(y_l.T, img.ravel(), (xx, yy), fill_value=0, method='linear')
+        if self.calibration_type == 'opencv':
+            return cv2.undistort(img, self.K, self.opencv_dist_coeff)
         else:
-            channels = [griddata(y_l.T, img[:, :, i].ravel(), (xx, yy), fill_value=0, method='linear')
-                        for i in xrange(img.shape[2])]
-            return np.dstack(channels)
+            xx, yy = np.meshgrid(np.arange(img.shape[1]), np.arange(img.shape[0]))
+            img_coords = np.array([xx.ravel(), yy.ravel()])
+            y_l = self.undistort(img_coords)
+            if img.ndim == 2:
+                return griddata(y_l.T, img.ravel(), (xx, yy), fill_value=0, method='linear')
+            else:
+                channels = [griddata(y_l.T, img[:, :, i].ravel(), (xx, yy), fill_value=0, method='linear')
+                            for i in xrange(img.shape[2])]
+                return np.dstack(channels)
 
     def undistort(self, distorted_image_coords):
         """
         Remove distortion from image coordinates.
 
-        **TODO: not implemented for other than division model**
+        **TODO: not implemented for other than division model and opencv**
 
         :param distorted_image_coords: real image coordinates
         :type distorted_image_coords: numpy.ndarray, shape=(2, n)
         :return: linear image coordinates
         :rtype: numpy.ndarray, shape=(2, n)
         """
+        assert distorted_image_coords.shape[0] == 2
+        assert distorted_image_coords.ndim == 2
         if self.calibration_type == 'division':
             A = self.get_A()
             Ainv = np.linalg.inv(A)
             undistorted_image_coords = p2e(A.dot(e2p(self._undistort_division(p2e(Ainv.dot(e2p(distorted_image_coords)))))))
+        elif self.calibration_type == 'opencv':
+            undistorted_image_coords = cv2.undistortPoints(distorted_image_coords.T.reshape((1, -1, 2)),
+                                                           self.K, self.opencv_dist_coeff,
+                                                           P=self.K).reshape(-1, 2).T
         else:
             warn('undistortion not implemented')
             undistorted_image_coords = distorted_image_coords
+        assert undistorted_image_coords.shape[0] == 2
+        assert undistorted_image_coords.ndim == 2
         return undistorted_image_coords
 
     def distort(self, undistorted_image_coords):
+        """
+        Apply distortion to ideal image coordinates.
+
+        **TODO: not implemented for other than division model and opencv**
+
+        :param undistorted_image_coords: ideal image coordinates
+        :type undistorted_image_coords: numpy.ndarray, shape=(2, n)
+        :return: distorted image coordinates
+        :rtype: numpy.ndarray, shape=(2, n)
+        """
+        assert undistorted_image_coords.shape[0] == 2
+        assert undistorted_image_coords.ndim == 2
         if self.calibration_type == 'division':
             A = self.get_A()
             Ainv = np.linalg.inv(A)
             distorted_image_coords = p2e(A.dot(e2p(self._distort_division(p2e(Ainv.dot(e2p(undistorted_image_coords)))))))
+        elif self.calibration_type == 'opencv':
+            undistorted_image_coords_norm = (undistorted_image_coords - column(self.K[0:2, 2])) / \
+                                            column(self.K.diagonal()[0:2])
+            undistorted_image_coords_3d = np.vstack((undistorted_image_coords_norm,
+                                                     np.zeros((1, undistorted_image_coords.shape[1]))))
+            distorted_image_coords, _ = cv2.projectPoints(undistorted_image_coords_3d.T, (0, 0, 0), (0, 0, 0),
+                                                          self.K, self.opencv_dist_coeff)
+            distorted_image_coords = distorted_image_coords.reshape(-1, 2).T
         else:
             assert False  # not implemented
+        assert distorted_image_coords.shape[0] == 2
+        assert distorted_image_coords.ndim == 2
         return distorted_image_coords
 
     def _distort_bouguet(self, undistorted_centered_image_coord):
@@ -596,6 +638,12 @@ class Camera:
         :rtype: numpy.ndarray, shape=(3, n)
         """
         assert(type(world) == np.ndarray)
+        if self.calibration_type == 'opencv':
+            if world.shape[0] == 4:
+                world = p2e(world)
+            distorted_image_coords, _ = cv2.projectPoints(world.T, self.R, self.t,
+                                                          self.K, self.opencv_dist_coeff)
+            return e2p(distorted_image_coords.T.reshape(2, -1))
         if world.shape[0] == 3:
             world = e2p(world)
         camera_coords = np.hstack((self.R, self.t)).dot(world)
@@ -634,11 +682,11 @@ class Camera:
         :return: n projective world coordinates
         :rtype: numpy.ndarray, shape=(4, n)
         """
-        if image_px.shape[0] == 2:
-            image_px = e2p(image_px)
+        if image_px.shape[0] == 3:
+            image_px = p2e(image_px)
         image_undistorted = self.undistort(image_px)
         tmpP = np.hstack((self.P[:, [0, 1]], self.P[:, 2, np.newaxis] * z + self.P[:, 3, np.newaxis]))
-        return np.linalg.inv(tmpP).dot(image_undistorted)
+        return np.linalg.inv(tmpP).dot(e2p(image_undistorted))
 
     def plot_world_points(self, points, plot_style, label=None,
                           solve_visibility=True):
