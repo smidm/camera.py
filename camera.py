@@ -680,13 +680,14 @@ class Camera:
         :param z: world z coordinate of the projected image points
         :type z: float
         :return: n projective world coordinates
-        :rtype: numpy.ndarray, shape=(4, n)
+        :rtype: numpy.ndarray, shape=(3, n)
         """
         if image_px.shape[0] == 3:
             image_px = p2e(image_px)
         image_undistorted = self.undistort(image_px)
         tmpP = np.hstack((self.P[:, [0, 1]], self.P[:, 2, np.newaxis] * z + self.P[:, 3, np.newaxis]))
-        return np.linalg.inv(tmpP).dot(e2p(image_undistorted))
+        world_xy = p2e(np.linalg.inv(tmpP).dot(e2p(image_undistorted)))
+        return np.vstack((world_xy, z * np.ones(image_px.shape[1])))
 
     def plot_world_points(self, points, plot_style, label=None,
                           solve_visibility=True):
