@@ -143,6 +143,7 @@ class Camera:
         self.tsai_dx = -1
         self.tsai_dy = -1
         self.opencv_dist_coeff = None
+        self.opencv_Kview = np.array([])
         self.calibration_type = 'standard'  # other possible values: bouguet, kannala, division, opencv
 
     def save(self, filename):
@@ -173,8 +174,9 @@ class Camera:
         elif self.calibration_type == 'division':
             data['division_lambda'] = self.division_lambda
             data['division_z_n'] = self.division_z_n
-        elif self.calibration_type == 'opencv':
+        elif self.calibration_type == 'opencv' or self.calibration_type == 'opencv_fisheye':
             data['opencv_dist_coeff'] = self.opencv_dist_coeff.tolist()
+            data['opencv_Kview'] = self.opencv_Kview.tolist()
         else:
             data['kappa'] = self.kappa.tolist()
         yaml.dump(data, open(filename, 'w'))
@@ -231,8 +233,10 @@ class Camera:
         elif self.calibration_type == 'division':
             self.division_lambda = data['division_lambda']
             self.division_z_n = data['division_z_n']
-        elif self.calibration_type == 'opencv':
+        elif self.calibration_type == 'opencv' or self.calibration_type == 'opencv_fisheye':
             self.opencv_dist_coeff = np.array(data['opencv_dist_coeff'])
+            if 'opencv_Kview' in data:
+                self.opencv_Kview = np.array(data['opencv_Kview'])
         else:
             self.kappa = np.array(data['kappa']).reshape((2,))
         self.update_P()
@@ -351,7 +355,9 @@ class Camera:
         :rtype: np.ndarray, shape=(n, m) or (n, m, 3)
         """
         if self.calibration_type == 'opencv':
-            return cv2.undistort(img, self.K, self.opencv_dist_coeff)
+            return cv2.undistort(img, self.K, self.opencv_dist_coeff, newCameraMatrix=self.opencv_Kview)
+        elif self.calibration_type == 'opencv_fisheye':
+                return cv2.fisheye.undistortImage(img, self.K, self.opencv_dist_coeff, Knew=self.opencv_Kview)
         else:
             xx, yy = np.meshgrid(np.arange(img.shape[1]), np.arange(img.shape[0]))
             img_coords = np.array([xx.ravel(), yy.ravel()])
@@ -383,7 +389,11 @@ class Camera:
         elif self.calibration_type == 'opencv':
             undistorted_image_coords = cv2.undistortPoints(distorted_image_coords.T.reshape((1, -1, 2)),
                                                            self.K, self.opencv_dist_coeff,
-                                                           P=self.K).reshape(-1, 2).T
+                                                           P=self.opencv_Kview).reshape(-1, 2).T
+        elif self.calibration_type == 'opencv_fisheye':
+            undistorted_image_coords = cv2.fisheye.undistortPoints(distorted_image_coords.T.reshape((1, -1, 2)),
+                                                           self.K, self.opencv_dist_coeff,
+                                                           P=self.opencv_Kview).reshape(-1, 2).T
         else:
             warn('undistortion not implemented')
             undistorted_image_coords = distorted_image_coords
@@ -415,7 +425,13 @@ class Camera:
                                                      np.zeros((1, undistorted_image_coords.shape[1]))))
             distorted_image_coords, _ = cv2.projectPoints(undistorted_image_coords_3d.T, (0, 0, 0), (0, 0, 0),
                                                           self.K, self.opencv_dist_coeff)
-            distorted_image_coords = distorted_image_coords.reshape(-1, 2).T
+        elif self.calibration_type == 'opencv_fisheye':
+            if self.opencv_Kview is not np.array([]):
+                # remove Kview transformation
+                undistorted_image_coords = p2e(np.matmul(np.linalg.inv(self.opencv_Kview),
+                                                         e2p(undistorted_image_coords)))
+            distorted_image_coords = cv2.fisheye.distortPoints(undistorted_image_coords.T.reshape((1, -1, 2)),
+                                                               self.K, self.opencv_dist_coeff).reshape(-1, 2).T
         else:
             assert False  # not implemented
         assert distorted_image_coords.shape[0] == 2
@@ -638,12 +654,17 @@ class Camera:
         :rtype: numpy.ndarray, shape=(3, n)
         """
         assert(type(world) == np.ndarray)
-        if self.calibration_type == 'opencv':
+        if self.calibration_type == 'opencv' or self.calibration_type == 'opencv_fisheye':
             if world.shape[0] == 4:
                 world = p2e(world)
-            distorted_image_coords, _ = cv2.projectPoints(world.T, self.R, self.t,
-                                                          self.K, self.opencv_dist_coeff)
-            return e2p(distorted_image_coords.T.reshape(2, -1))
+            if self.calibration_type == 'opencv':
+                distorted_image_coords = cv2.projectPoints(world.T, self.R, self.t,
+                                                           self.K, self.opencv_dist_coeff)[0].reshape(-1, 2).T
+            else:
+                distorted_image_coords = cv2.fisheye.projectPoints(
+                        world.T.reshape((1, -1, 3)), cv2.Rodrigues(self.R)[0],
+                        self.t, self.K, self.opencv_dist_coeff)[0].reshape(-1, 2).T
+            return e2p(distorted_image_coords)
         if world.shape[0] == 3:
             world = e2p(world)
         camera_coords = np.hstack((self.R, self.t)).dot(world)
