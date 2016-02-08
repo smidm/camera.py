@@ -389,7 +389,7 @@ class Camera:
         elif self.calibration_type == 'opencv':
             undistorted_image_coords = cv2.undistortPoints(distorted_image_coords.T.reshape((1, -1, 2)),
                                                            self.K, self.opencv_dist_coeff,
-                                                           P=self.opencv_Kview).reshape(-1, 2).T
+                                                           P=self.K).reshape(-1, 2).T
         elif self.calibration_type == 'opencv_fisheye':
             undistorted_image_coords = cv2.fisheye.undistortPoints(distorted_image_coords.T.reshape((1, -1, 2)),
                                                            self.K, self.opencv_dist_coeff,
@@ -425,6 +425,7 @@ class Camera:
                                                      np.zeros((1, undistorted_image_coords.shape[1]))))
             distorted_image_coords, _ = cv2.projectPoints(undistorted_image_coords_3d.T, (0, 0, 0), (0, 0, 0),
                                                           self.K, self.opencv_dist_coeff)
+            distorted_image_coords = distorted_image_coords.reshape(-1, 2).T
         elif self.calibration_type == 'opencv_fisheye':
             if self.opencv_Kview is not np.array([]):
                 # remove Kview transformation
