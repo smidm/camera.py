@@ -5,6 +5,7 @@ from scipy.special import cbrt
 from scipy.interpolate import griddata
 from scipy.optimize import minimize_scalar
 from warnings import warn
+
 try:
     import cv2
 except ImportError:
@@ -107,7 +108,6 @@ def nearest_point_on_line(xy, mc):
     y = m * x + c
     return np.array([x, y])
 
-
 class Camera:
     """
     Projective camera model
@@ -118,18 +118,21 @@ class Camera:
         - conversion of image coordinates on a plane to camera coordinates
         - visibility handling
     """
+
     def __init__(self, id=None):
         """
         :param id: camera identification number
         :type id: unknown or int
         """
-        self.K = np.eye(3)
+        self.K = np.eye(3)  # camera intrinsic parameters
+        self.Kundistortion = np.array([])  # could be altered based on K using set_undistorted_view(alpha)
+        #  to get undistorted image with all / corner pixels visible
         self.R = np.eye(3)
         self.t = np.zeros((3, 1))
-        self.update_P()
         self.kappa = np.zeros((2,))
         self.id = id
         self.size_px = np.zeros((2,))
+        # self.size_px_view = np.zeros((2,))  #
 
         self.bouguet_kc = np.zeros((5,))
         self.kannala_p = np.zeros((6,))
@@ -143,8 +146,8 @@ class Camera:
         self.tsai_dx = -1
         self.tsai_dy = -1
         self.opencv_dist_coeff = None
-        self.opencv_Kview = np.array([])
         self.calibration_type = 'standard'  # other possible values: bouguet, kannala, division, opencv
+        self.update_P()
 
     def save(self, filename):
         """
@@ -157,6 +160,8 @@ class Camera:
                 'size_px': self.size_px.tolist(),
                 'calibration_type': self.calibration_type
                 }
+        if self.Kundistortion.size != 0:
+            data['Kundistortion'] = self.Kundistortion.tolist()
         if self.calibration_type == 'bouguet':
             data['bouguet_kc'] = self.bouguet_kc.tolist()
         elif self.calibration_type == 'kannala':
@@ -176,7 +181,6 @@ class Camera:
             data['division_z_n'] = self.division_z_n
         elif self.calibration_type == 'opencv' or self.calibration_type == 'opencv_fisheye':
             data['opencv_dist_coeff'] = self.opencv_dist_coeff.tolist()
-            data['opencv_Kview'] = self.opencv_Kview.tolist()
         else:
             data['kappa'] = self.kappa.tolist()
         yaml.dump(data, open(filename, 'w'))
@@ -206,12 +210,22 @@ class Camera:
 
         """
         data = yaml.load(open(filename))
-        self.id = data['id']
-        self.K = np.array(data['K']).reshape((3, 3))
-        self.R = np.array(data['R']).reshape((3, 3))
-        self.t = np.array(data['t']).reshape((3, 1))
-        self.size_px = np.array(data['size_px']).reshape((2,))
-        self.calibration_type = data['calibration_type']
+        if 'id' in data:
+            self.id = data['id']
+        if 'K' in data:
+            self.K = np.array(data['K']).reshape((3, 3))
+        if 'R' in data:
+            self.R = np.array(data['R']).reshape((3, 3))
+        if 't' in data:
+            self.t = np.array(data['t']).reshape((3, 1))
+        if 'size_px' in data:
+            self.size_px = np.array(data['size_px']).reshape((2,))
+        if 'calibration_type' in data:
+            self.calibration_type = data['calibration_type']
+        if 'Kundistortion' in data:
+            self.Kundistortion = np.array(data['Kundistortion'])
+        else:
+            self.Kundistortion = self.K
         if self.calibration_type == 'bouguet':
             self.bouguet_kc = np.array(data['bouguet_kc']).reshape((5,))
         elif self.calibration_type == 'kannala':
@@ -235,10 +249,16 @@ class Camera:
             self.division_z_n = data['division_z_n']
         elif self.calibration_type == 'opencv' or self.calibration_type == 'opencv_fisheye':
             self.opencv_dist_coeff = np.array(data['opencv_dist_coeff'])
-            if 'opencv_Kview' in data:
-                self.opencv_Kview = np.array(data['opencv_Kview'])
-        else:
+        elif self.calibration_type == 'standard':
             self.kappa = np.array(data['kappa']).reshape((2,))
+        if 'id' not in data and \
+                        'K' not in data and \
+                        'R' not in data and \
+                        't' not in data and \
+                        'size_px' not in data and \
+                        'calibration_type' not in data and \
+                        'Kundistortion' not in data:
+            warn('Nothing loaded from %s, check the contents.' % filename)
         self.update_P()
 
     def update_P(self):
@@ -273,8 +293,8 @@ class Camera:
         :type a: double
         """
         self.K = np.array([[f, -f * 1 / math.tan(theta_rad), u0_px],
-                           [0, f / (a * math.sin(theta_rad)), v0_px],
-                           [0, 0, 1]])
+                      [0, f / (a * math.sin(theta_rad)), v0_px],
+                      [0, 0, 1]])
         self.update_P()
 
     def set_R(self, R):
@@ -333,35 +353,52 @@ class Camera:
         K_0[1, 1] = self.get_focal_length()
         return K_0
 
-    def get_A(self):
+    def get_A(self, K=None):
         """
         Return part of K matrix that applies center, skew and aspect ratio to ideal image coordinates.
 
         :rtype: np.ndarray, shape=(3, 3)
         """
-        A = self.K.copy()
+        if K is None:
+            K = self.K
+        A = K.copy()
         A[0, 0] /= self.get_focal_length()
         A[0, 1] /= self.get_focal_length()
         A[1, 1] /= self.get_focal_length()
         return A
 
-    def undistort_image(self, img):
+    def get_z0_homography(self, K=None):
+        """
+        Return homography from world plane at z = 0 to image plane.
+
+        :return: 2d plane homography
+        :rtype: np.ndarray, shape=(3, 3)
+        """
+        if K is None:
+            K = self.K
+        return K.dot(np.hstack((self.R, self.t)))[:, [0, 1, 3]]
+
+    def undistort_image(self, img, Kundistortion=None):
         """
         Transform grayscale image such that radial distortion is removed.
 
         :param img: input image
         :type img: np.ndarray, shape=(n, m) or (n, m, 3)
+        :param Kundistortion: camera matrix for undistorted view, None for self.K
+        :type Kundistortion: array-like, shape=(3, 3)
         :return: transformed image
         :rtype: np.ndarray, shape=(n, m) or (n, m, 3)
         """
+        if Kundistortion is None:
+            Kundistortion = self.K
         if self.calibration_type == 'opencv':
-            return cv2.undistort(img, self.K, self.opencv_dist_coeff, newCameraMatrix=self.opencv_Kview)
+            return cv2.undistort(img, self.K, self.opencv_dist_coeff, newCameraMatrix=Kundistortion)
         elif self.calibration_type == 'opencv_fisheye':
-                return cv2.fisheye.undistortImage(img, self.K, self.opencv_dist_coeff, Knew=self.opencv_Kview)
+                return cv2.fisheye.undistortImage(img, self.K, self.opencv_dist_coeff, Knew=Kundistortion)
         else:
             xx, yy = np.meshgrid(np.arange(img.shape[1]), np.arange(img.shape[0]))
             img_coords = np.array([xx.ravel(), yy.ravel()])
-            y_l = self.undistort(img_coords)
+            y_l = self.undistort(img_coords, Kundistortion)
             if img.ndim == 2:
                 return griddata(y_l.T, img.ravel(), (xx, yy), fill_value=0, method='linear')
             else:
@@ -369,31 +406,33 @@ class Camera:
                             for i in xrange(img.shape[2])]
                 return np.dstack(channels)
 
-    def undistort(self, distorted_image_coords):
+    def undistort(self, distorted_image_coords, Kundistortion=None):
         """
         Remove distortion from image coordinates.
 
-        **TODO: not implemented for other than division model and opencv**
-
         :param distorted_image_coords: real image coordinates
         :type distorted_image_coords: numpy.ndarray, shape=(2, n)
+        :param Kundistortion: camera matrix for undistorted view, None for self.K
+        :type Kundistortion: array-like, shape=(3, 3)
         :return: linear image coordinates
         :rtype: numpy.ndarray, shape=(2, n)
         """
         assert distorted_image_coords.shape[0] == 2
         assert distorted_image_coords.ndim == 2
+        if Kundistortion is None:
+            Kundistortion = self.K
         if self.calibration_type == 'division':
-            A = self.get_A()
+            A = self.get_A(Kundistortion)
             Ainv = np.linalg.inv(A)
             undistorted_image_coords = p2e(A.dot(e2p(self._undistort_division(p2e(Ainv.dot(e2p(distorted_image_coords)))))))
         elif self.calibration_type == 'opencv':
             undistorted_image_coords = cv2.undistortPoints(distorted_image_coords.T.reshape((1, -1, 2)),
                                                            self.K, self.opencv_dist_coeff,
-                                                           P=self.K).reshape(-1, 2).T
+                                                           P=Kundistortion).reshape(-1, 2).T
         elif self.calibration_type == 'opencv_fisheye':
             undistorted_image_coords = cv2.fisheye.undistortPoints(distorted_image_coords.T.reshape((1, -1, 2)),
-                                                           self.K, self.opencv_dist_coeff,
-                                                           P=self.opencv_Kview).reshape(-1, 2).T
+                                                                   self.K, self.opencv_dist_coeff,
+                                                                   P=Kundistortion).reshape(-1, 2).T
         else:
             warn('undistortion not implemented')
             undistorted_image_coords = distorted_image_coords
@@ -401,36 +440,41 @@ class Camera:
         assert undistorted_image_coords.ndim == 2
         return undistorted_image_coords
 
-    def distort(self, undistorted_image_coords):
+    def distort(self, undistorted_image_coords, Kundistortion=None):
         """
         Apply distortion to ideal image coordinates.
 
-        **TODO: not implemented for other than division model and opencv**
-
         :param undistorted_image_coords: ideal image coordinates
         :type undistorted_image_coords: numpy.ndarray, shape=(2, n)
+        :param Kundistortion: camera matrix for undistorted coordinates, None for self.K
+        :type Kundistortion: array-like, shape=(3, 3)
         :return: distorted image coordinates
         :rtype: numpy.ndarray, shape=(2, n)
         """
         assert undistorted_image_coords.shape[0] == 2
         assert undistorted_image_coords.ndim == 2
+        if Kundistortion is None:
+            Kundistortion = self.K
         if self.calibration_type == 'division':
-            A = self.get_A()
+            A = self.get_A(Kundistortion)
             Ainv = np.linalg.inv(A)
             distorted_image_coords = p2e(A.dot(e2p(self._distort_division(p2e(Ainv.dot(e2p(undistorted_image_coords)))))))
         elif self.calibration_type == 'opencv':
-            undistorted_image_coords_norm = (undistorted_image_coords - column(self.K[0:2, 2])) / \
-                                            column(self.K.diagonal()[0:2])
+            undistorted_image_coords_norm = (undistorted_image_coords - column(Kundistortion[0:2, 2])) / \
+                                            column(Kundistortion.diagonal()[0:2])
             undistorted_image_coords_3d = np.vstack((undistorted_image_coords_norm,
                                                      np.zeros((1, undistorted_image_coords.shape[1]))))
             distorted_image_coords, _ = cv2.projectPoints(undistorted_image_coords_3d.T, (0, 0, 0), (0, 0, 0),
                                                           self.K, self.opencv_dist_coeff)
             distorted_image_coords = distorted_image_coords.reshape(-1, 2).T
         elif self.calibration_type == 'opencv_fisheye':
-            if self.opencv_Kview is not np.array([]):
-                # remove Kview transformation
-                undistorted_image_coords = p2e(np.matmul(np.linalg.inv(self.opencv_Kview),
-                                                         e2p(undistorted_image_coords)))
+            # if self.Kundistortion is not np.array([]):
+            #     # remove Kview transformation
+            #     undistorted_image_coords = p2e(np.matmul(np.linalg.inv(self.Kundistortion),
+            #                                              e2p(undistorted_image_coords)))
+            # TODO check correctness
+            undistorted_image_coords = p2e(np.matmul(np.linalg.inv(Kundistortion),
+                                                     e2p(undistorted_image_coords)))
             distorted_image_coords = cv2.fisheye.distortPoints(undistorted_image_coords.T.reshape((1, -1, 2)),
                                                                self.K, self.opencv_dist_coeff).reshape(-1, 2).T
         else:
@@ -710,6 +754,33 @@ class Camera:
         tmpP = np.hstack((self.P[:, [0, 1]], self.P[:, 2, np.newaxis] * z + self.P[:, 3, np.newaxis]))
         world_xy = p2e(np.linalg.inv(tmpP).dot(e2p(image_undistorted)))
         return np.vstack((world_xy, z * np.ones(image_px.shape[1])))
+
+    def get_view_matrix(self, alpha):
+        """
+        Returns camera matrix for handling image and coordinates distortion and undistortion. Based on alpha,
+        up to all pixels of the distorted image can be visible in the undistorted image.
+
+        :param alpha: Free scaling parameter between 0 (when all the pixels in the undistorted image are valid) and 1
+                      (when all the source image pixels are retained in the undistorted image). For convenience for -1
+                      returns custom camera matrix self.Kundistortion and None returns self.K.
+        :type alpha: float or None
+        :return: camera matrix for a view defined by alpha
+        :rtype: array, shape=(3, 3)
+        """
+        if alpha == -1:
+            Kundistortion = self.Kundistortion
+        elif alpha is None:
+            Kundistortion = self.K
+        elif self.calibration_type == 'opencv':
+            Kundistortion, _ = cv2.getOptimalNewCameraMatrix(self.K, self.opencv_dist_coeff, tuple(self.size_px), alpha)
+        elif self.calibration_type == 'opencv_fisheye':
+            Kundistortion = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(self.K, self.opencv_dist_coeff,
+                                                                                   tuple(self.size_px), self.R,
+                                                                                   balance=alpha)
+        else:
+            # TODO
+            assert False, 'not implemented'
+        return Kundistortion
 
     def plot_world_points(self, points, plot_style, label=None,
                           solve_visibility=True):
