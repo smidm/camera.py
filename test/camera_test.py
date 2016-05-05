@@ -46,7 +46,7 @@ def load_test():
     import matplotlib.pylab as plt
     plt.imshow(plt.imread('test/cam01.png'))
     # plt.show()
-    plt.savefig('camera_load_test.png', dpi=150)
+    plt.savefig('test/out/camera_load_test.png', dpi=150)
     plt.close()
 
 
