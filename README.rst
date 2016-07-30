@@ -46,7 +46,7 @@ Load camera parameters from a file::
 Documentation
 -------------
 
-http://python-projective-camera-model.readthedocs.org
+http://python-projective-camera-model.readthedocs.io
 
 Development
 -----------
