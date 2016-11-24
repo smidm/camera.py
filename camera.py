@@ -571,7 +571,7 @@ class Camera:
         Analytical inverse of the undistort_tsai() function.
 
         :param metric_image_coord: centered metric image coordinates
-            (metric image coordiante = image_xy * f / z)
+            (metric image coordinate = image_xy * f / z)
         :type metric_image_coord: numpy.ndarray, shape=(2, n)
         :return: distorted centered metric image coordinates
         :rtype: numpy.ndarray, shape=(2, n)
